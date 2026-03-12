@@ -132,7 +132,7 @@ async function fetchCollegeStats(collegeName: string): Promise<CollegeStats | nu
     const extraWords = resultWords.filter(w => !normalise(collegeName).includes(w)).length;
     return { r, score: matches + exactBonus - extraWords };
   });
-  
+
   const best = scored.sort((a, b) => b.score - a.score)[0].r;
   console.log(`Matched "${collegeName}" → "${best["school.name"]}"`);
 
@@ -170,17 +170,15 @@ async function enrichWithDescriptions(
   studentProfile: string,
   colleges: Array<CollegeStats & { type: "Safety" | "Match" | "Reach" }>
 ): Promise<object> {
-  const prompt = `You are a college admissions counselor. A student has been matched to these colleges using REAL verified statistics from the US Department of Education.
-
-Write ONLY the qualitative/descriptive fields. Do NOT change or invent any statistics.
+  const prompt = `You are a college admissions counselor. You MUST return data for ALL ${colleges.length} colleges listed below. Do not skip, merge, or drop any college.
 
 Student profile:
 ${studentProfile}
 
-Colleges with verified stats:
+Colleges with verified stats (YOU MUST INCLUDE ALL ${colleges.length}):
 ${JSON.stringify(colleges, null, 2)}
 
-Return ONLY valid JSON — no markdown, no extra text:
+Return ONLY valid JSON — no markdown, no extra text. The "colleges" array MUST contain exactly ${colleges.length} objects:
 {
   "colleges": [
     {
@@ -192,14 +190,14 @@ Return ONLY valid JSON — no markdown, no extra text:
       "tuition": "exactly as provided",
       "size": "exactly as provided",
       "matchScore": <0-100 integer based on student fit>,
-      "whyMatch": "2-3 sentences on why this school fits THIS specific student's major, budget, and location preferences",
+      "whyMatch": "2-3 sentences on why this school fits THIS specific student",
       "topPrograms": ["Program 1", "Program 2", "Program 3"],
-      "campusLife": "1 sentence about clubs or activities relevant to this student's interests",
-      "financialAid": "1 sentence about merit aid, need-based aid, or scholarship availability"
+      "campusLife": "1 sentence about clubs or activities relevant to this student",
+      "financialAid": "1 sentence about merit aid or scholarship availability"
     }
   ],
-  "summary": "2-3 sentence overall strategy summary for this specific student",
-  "tips": ["Actionable tip 1 specific to this student", "Actionable tip 2", "Actionable tip 3"]
+  "summary": "2-3 sentence overall strategy summary",
+  "tips": ["Tip 1", "Tip 2", "Tip 3"]
 }`;
 
   const response = await groq.chat.completions.create({
