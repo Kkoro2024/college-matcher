@@ -52,8 +52,10 @@ When given a student's profile, you MUST respond in exactly this JSON format and
 
 Rules:
 - Always return exactly 8 colleges: 3 Safety, 3 Match, 2 Reach
+- For REACH schools, choose schools with 15-30% acceptance rates — never recommend Ivy League or sub-12% acceptance schools unless the student explicitly requests them
 - matchScore is 0-100 based on how well the college fits the student
-- Be realistic about acceptance rates and requirements
+- Use ACCURATE, REAL acceptance rates and GPA averages — never invent or estimate statistics
+- Reference these known accurate rates: UMass Amherst ~64%, Boston University ~37%, Northeastern ~18%, University of Rochester ~30%, RPI ~47%, WPI ~49%, Villanova ~28%, Fordham ~46%, American University ~35%, Lehigh ~41%, Tulane ~13%, University of Miami ~27%, NYU ~21%, Case Western ~47%
 - Tailor recommendations to the student's major, location, budget, and activities
 - Return ONLY valid JSON, no markdown, no extra text`;
 
