@@ -84,76 +84,56 @@ async function fetchCollegeStats(collegeName: string): Promise<CollegeStats | nu
     "latest.school.state",
   ].join(",");
 
-  // Try progressively shorter name fragments to improve match chances
-  const searchAttempts = [
-    collegeName,
-    collegeName.replace(/\b(University|College|Institute|of Technology)\b/gi, "").trim(),
-    collegeName.split(" ").slice(0, 3).join(" "),
-    collegeName.split(" ")[0],
-  ];
+  // Extract the most distinctive keyword (skip generic words)
+  const stopWords = new Set(["university", "college", "institute", "of", "the", "at", "and", "school", "technology"]);
+  const keyword = collegeName
+    .split(" ")
+    .find(w => !stopWords.has(w.toLowerCase()) && w.length > 2) || collegeName.split(" ")[0];
 
-  let results: ScorecardResult[] = [];
+  const url = `${SCORECARD_BASE}?school.name=${encodeURIComponent(keyword)}&fields=${fields}&api_key=${SCORECARD_API_KEY}&per_page=10`;
 
-  for (const attempt of searchAttempts) {
-    if (!attempt || attempt.length < 3) continue;
-    const url = `${SCORECARD_BASE}?school.name=${encodeURIComponent(attempt)}&fields=${fields}&api_key=${SCORECARD_API_KEY}&per_page=5`;
-    try {
-      const res = await fetch(url);
-      const data = await res.json();
-      if (data?.results?.length) {
-        results = data.results;
-        break;
-      }
-    } catch {
-      continue;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    const results: ScorecardResult[] = data?.results;
+    if (!results?.length) {
+      console.log("No results for:", collegeName, "(keyword:", keyword, ")");
+      return null;
     }
-  }
 
-  if (!results.length) {
-    console.log("Could not find Scorecard data for:", collegeName);
+    // Score each result by how many words from the original name it contains
+    const normalise = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, "");
+    const targetWords = normalise(collegeName).split(" ").filter(w => !stopWords.has(w) && w.length > 2);
+
+    const scored = results.map(r => {
+      const resultName = normalise(r["school.name"]);
+      const matches = targetWords.filter(w => resultName.includes(w)).length;
+      return { r, matches };
+    });
+
+    const best = scored.sort((a, b) => b.matches - a.matches)[0].r;
+    console.log(`Matched "${collegeName}" → "${best["school.name"]}"`);
+
+    const rawRate = best["latest.admissions.admission_rate.overall"];
+    const acceptanceRate = rawRate != null ? `${Math.round(rawRate * 100)}%` : "N/A";
+    const sat = best["latest.admissions.sat_scores.average.overall"];
+    const avgSAT = sat != null ? Math.round(sat).toString() : "N/A";
+    const oos = best["latest.cost.tuition.out_of_state"];
+    const ins = best["latest.cost.tuition.in_state"];
+    const tuitionVal = oos ?? ins;
+    const tuition = tuitionVal != null ? `$${tuitionVal.toLocaleString()}/year` : "N/A";
+    const studentSize = best["latest.student.size"] ?? 0;
+    const size: "Small" | "Medium" | "Large" =
+      studentSize < 5000 ? "Small" : studentSize < 15000 ? "Medium" : "Large";
+    const city = best["latest.school.city"] ?? "";
+    const state = best["latest.school.state"] ?? "";
+    const location = city && state ? `${city}, ${state}` : "N/A";
+
+    return { name: best["school.name"], location, acceptanceRate, avgSAT, tuition, size, rawAcceptanceRate: rawRate };
+  } catch (err) {
+    console.log("Fetch error for:", collegeName, err);
     return null;
   }
-
-  // Find the best match by comparing names
-  const normalise = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, "");
-  const target = normalise(collegeName);
-
-  const school = results.reduce((best, current) => {
-    const currentName = normalise(current["school.name"]);
-    const bestName = normalise(best["school.name"]);
-    const currentScore = currentName.includes(target) || target.includes(currentName) ? 1 : 0;
-    const bestScore = bestName.includes(target) || target.includes(bestName) ? 1 : 0;
-    return currentScore >= bestScore ? current : best;
-  });
-
-  const rawRate = school["latest.admissions.admission_rate.overall"];
-  const acceptanceRate = rawRate != null ? `${Math.round(rawRate * 100)}%` : "N/A";
-
-  const sat = school["latest.admissions.sat_scores.average.overall"];
-  const avgSAT = sat != null ? Math.round(sat).toString() : "N/A";
-
-  const oos = school["latest.cost.tuition.out_of_state"];
-  const ins = school["latest.cost.tuition.in_state"];
-  const tuitionVal = oos ?? ins;
-  const tuition = tuitionVal != null ? `$${tuitionVal.toLocaleString()}/year` : "N/A";
-
-  const studentSize = school["latest.student.size"] ?? 0;
-  const size: "Small" | "Medium" | "Large" =
-    studentSize < 5000 ? "Small" : studentSize < 15000 ? "Medium" : "Large";
-
-  const city = school["latest.school.city"] ?? "";
-  const state = school["latest.school.state"] ?? "";
-  const location = city && state ? `${city}, ${state}` : "N/A";
-
-  return {
-    name: school["school.name"],
-    location,
-    acceptanceRate,
-    avgSAT,
-    tuition,
-    size,
-    rawAcceptanceRate: rawRate,
-  };
 }
 
 // ─── Classify type based on real acceptance rate ──────────────────────────────
