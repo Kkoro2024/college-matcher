@@ -24,7 +24,6 @@ interface ScorecardResult {
   "latest.cost.tuition.in_state": number | null;
   "latest.school.city": string;
   "latest.school.state": string;
-  "latest.school.carnegie_size_setting": number | null;
 }
 
 interface CollegeStats {
@@ -34,10 +33,10 @@ interface CollegeStats {
   avgSAT: string;
   tuition: string;
   size: "Small" | "Medium" | "Large";
-  rawAcceptanceRate: number | null; // used for Safety/Match/Reach classification
+  rawAcceptanceRate: number | null;
 }
 
-// ─── Step 1: Ask LLM for college name recommendations only ───────────────────
+// ─── Step 1: LLM picks college names only ────────────────────────────────────
 
 async function getCollegeRecommendations(studentProfile: string): Promise<{ name: string; type: "Safety" | "Match" | "Reach" }[]> {
   const prompt = `You are a college admissions counselor. Based on this student profile, recommend exactly 8 US colleges/universities: 3 Safety, 3 Match, 2 Reach.
@@ -50,11 +49,12 @@ Return ONLY a JSON array — no markdown, no extra text:
 
 Rules:
 - Use the full, exact official name (e.g. "University of Massachusetts Amherst", not "UMass")
-- Safety = student is very likely to be admitted
-- Match = student has a reasonable chance
-- Reach = competitive but achievable (acceptance rate 12-30%)
-- Do NOT recommend Ivy League or schools under 12% acceptance unless the student asks
+- Safety = student is very likely to be admitted (acceptance rate above 50%)
+- Match = student has a reasonable chance (acceptance rate 30-50%)
+- Reach = competitive but achievable (acceptance rate 15-30%)
+- Do NOT recommend schools under 12% acceptance unless the student asks
 - Tailor choices to the student's intended major, location preferences, and budget
+- Recommend well-known schools that are easy to look up
 
 Student profile:
 ${studentProfile}`;
@@ -70,12 +70,9 @@ ${studentProfile}`;
   return JSON.parse(cleaned);
 }
 
-// ─── Step 2: Fetch real stats from College Scorecard API ─────────────────────
+// ─── Step 2: Fetch real stats from Scorecard with fallback search ─────────────
 
 async function fetchCollegeStats(collegeName: string): Promise<CollegeStats | null> {
-  console.log("Fetching stats for:", collegeName);
-  console.log("API key present:", !!SCORECARD_API_KEY);
-  
   const fields = [
     "school.name",
     "latest.admissions.admission_rate.overall",
@@ -85,22 +82,49 @@ async function fetchCollegeStats(collegeName: string): Promise<CollegeStats | nu
     "latest.cost.tuition.in_state",
     "latest.school.city",
     "latest.school.state",
-    "latest.school.carnegie_size_setting",
   ].join(",");
 
-  const url = `${SCORECARD_BASE}?school.name=${encodeURIComponent(collegeName)}&fields=${fields}&api_key=${SCORECARD_API_KEY}`;
-  const res = await fetch(url);
-  const data = await res.json();
+  // Try progressively shorter name fragments to improve match chances
+  const searchAttempts = [
+    collegeName,
+    collegeName.replace(/\b(University|College|Institute|of Technology)\b/gi, "").trim(),
+    collegeName.split(" ").slice(0, 3).join(" "),
+    collegeName.split(" ")[0],
+  ];
 
-  console.log("Scorecard response for", collegeName, ":", JSON.stringify(data?.results?.length), "results");
+  let results: ScorecardResult[] = [];
 
-  const results: ScorecardResult[] = data?.results;
-  if (!results?.length) return null;
+  for (const attempt of searchAttempts) {
+    if (!attempt || attempt.length < 3) continue;
+    const url = `${SCORECARD_BASE}?school.name=${encodeURIComponent(attempt)}&fields=${fields}&api_key=${SCORECARD_API_KEY}&per_page=5`;
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data?.results?.length) {
+        results = data.results;
+        break;
+      }
+    } catch {
+      continue;
+    }
+  }
 
-  // Pick the closest name match
-  const school = results.find(r =>
-    r["school.name"].toLowerCase().includes(collegeName.toLowerCase().split(" ")[0])
-  ) || results[0];
+  if (!results.length) {
+    console.log("Could not find Scorecard data for:", collegeName);
+    return null;
+  }
+
+  // Find the best match by comparing names
+  const normalise = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, "");
+  const target = normalise(collegeName);
+
+  const school = results.reduce((best, current) => {
+    const currentName = normalise(current["school.name"]);
+    const bestName = normalise(best["school.name"]);
+    const currentScore = currentName.includes(target) || target.includes(currentName) ? 1 : 0;
+    const bestScore = bestName.includes(target) || target.includes(bestName) ? 1 : 0;
+    return currentScore >= bestScore ? current : best;
+  });
 
   const rawRate = school["latest.admissions.admission_rate.overall"];
   const acceptanceRate = rawRate != null ? `${Math.round(rawRate * 100)}%` : "N/A";
@@ -111,9 +135,7 @@ async function fetchCollegeStats(collegeName: string): Promise<CollegeStats | nu
   const oos = school["latest.cost.tuition.out_of_state"];
   const ins = school["latest.cost.tuition.in_state"];
   const tuitionVal = oos ?? ins;
-  const tuition = tuitionVal != null
-    ? `$${tuitionVal.toLocaleString()}/year`
-    : "N/A";
+  const tuition = tuitionVal != null ? `$${tuitionVal.toLocaleString()}/year` : "N/A";
 
   const studentSize = school["latest.student.size"] ?? 0;
   const size: "Small" | "Medium" | "Large" =
@@ -134,15 +156,25 @@ async function fetchCollegeStats(collegeName: string): Promise<CollegeStats | nu
   };
 }
 
-// ─── Step 3: Ask LLM to write qualitative details using real stats ───────────
+// ─── Classify type based on real acceptance rate ──────────────────────────────
+
+function classifyType(rawRate: number | null, llmType: "Safety" | "Match" | "Reach"): "Safety" | "Match" | "Reach" {
+  if (rawRate == null) return llmType; // fallback to LLM suggestion if no data
+  const pct = rawRate * 100;
+  if (pct >= 50) return "Safety";
+  if (pct >= 25) return "Match";
+  return "Reach";
+}
+
+// ─── Step 3: LLM writes qualitative fields using real stats ───────────────────
 
 async function enrichWithDescriptions(
   studentProfile: string,
   colleges: Array<CollegeStats & { type: "Safety" | "Match" | "Reach" }>
 ): Promise<object> {
-  const prompt = `You are a college admissions counselor. A student has been matched to these colleges using REAL, verified statistics from the US Department of Education.
+  const prompt = `You are a college admissions counselor. A student has been matched to these colleges using REAL verified statistics from the US Department of Education.
 
-Your job is to write ONLY the qualitative/descriptive fields. Do not change or invent any statistics.
+Write ONLY the qualitative/descriptive fields. Do NOT change or invent any statistics.
 
 Student profile:
 ${studentProfile}
@@ -150,7 +182,7 @@ ${studentProfile}
 Colleges with verified stats:
 ${JSON.stringify(colleges, null, 2)}
 
-Return ONLY valid JSON in this exact format — no markdown, no extra text:
+Return ONLY valid JSON — no markdown, no extra text:
 {
   "colleges": [
     {
@@ -161,15 +193,15 @@ Return ONLY valid JSON in this exact format — no markdown, no extra text:
       "avgSAT": "exactly as provided",
       "tuition": "exactly as provided",
       "size": "exactly as provided",
-      "matchScore": <0-100 integer based on fit>,
-      "whyMatch": "2-3 sentences on why this school fits THIS specific student",
+      "matchScore": <0-100 integer based on student fit>,
+      "whyMatch": "2-3 sentences on why this school fits THIS specific student's major, budget, and location preferences",
       "topPrograms": ["Program 1", "Program 2", "Program 3"],
-      "campusLife": "1 sentence about clubs/activities relevant to student interests",
-      "financialAid": "1 sentence about financial aid or scholarship availability"
+      "campusLife": "1 sentence about clubs or activities relevant to this student's interests",
+      "financialAid": "1 sentence about merit aid, need-based aid, or scholarship availability"
     }
   ],
-  "summary": "2-3 sentence overall strategy summary for this student",
-  "tips": ["Actionable tip 1", "Actionable tip 2", "Actionable tip 3"]
+  "summary": "2-3 sentence overall strategy summary for this specific student",
+  "tips": ["Actionable tip 1 specific to this student", "Actionable tip 2", "Actionable tip 3"]
 }`;
 
   const response = await groq.chat.completions.create({
@@ -199,23 +231,25 @@ export async function registerRoutes(
     try {
       const input = api.qna.ask.input.parse(req.body);
 
-      // Step 1 — LLM picks colleges (reasoning, no stats)
+      // Step 1 — LLM picks colleges (reasoning only, no stats)
       const recommendations = await getCollegeRecommendations(input.question);
+      console.log("LLM recommended:", recommendations.map(r => r.name));
 
-      console.log("LLM recommended:", JSON.stringify(recommendations, null, 2));
-
-      // Step 2 — Fetch real stats for each college from Scorecard API
+      // Step 2 — Fetch real stats for each college
       const statsResults = await Promise.all(
         recommendations.map(async (rec) => {
           const stats = await fetchCollegeStats(rec.name);
           if (!stats) return null;
-          return { ...stats, type: rec.type };
+          const type = classifyType(stats.rawAcceptanceRate, rec.type);
+          return { ...stats, type };
         })
       );
 
       const validColleges = statsResults.filter(
         (c): c is CollegeStats & { type: "Safety" | "Match" | "Reach" } => c !== null
       );
+
+      console.log(`Found Scorecard data for ${validColleges.length}/${recommendations.length} colleges`);
 
       if (!validColleges.length) {
         return res.status(502).json({ message: "Could not retrieve college data. Check your COLLEGE_SCORECARD_API_KEY." });
