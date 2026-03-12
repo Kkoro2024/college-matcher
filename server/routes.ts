@@ -5,10 +5,180 @@ import { api } from "@shared/routes";
 import { z } from "zod";
 import OpenAI from "openai";
 
-const openrouter = new OpenAI({
+const SCORECARD_API_KEY = process.env.COLLEGE_SCORECARD_API_KEY;
+const SCORECARD_BASE = "https://api.data.gov/ed/collegescorecard/v1/schools";
+
+const groq = new OpenAI({
   baseURL: "https://api.groq.com/openai/v1",
   apiKey: process.env.GROQ_API_KEY,
 });
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface ScorecardResult {
+  "school.name": string;
+  "latest.admissions.admission_rate.overall": number | null;
+  "latest.admissions.sat_scores.average.overall": number | null;
+  "latest.student.size": number | null;
+  "latest.cost.tuition.out_of_state": number | null;
+  "latest.cost.tuition.in_state": number | null;
+  "latest.school.city": string;
+  "latest.school.state": string;
+  "latest.school.carnegie_size_setting": number | null;
+}
+
+interface CollegeStats {
+  name: string;
+  location: string;
+  acceptanceRate: string;
+  avgSAT: string;
+  tuition: string;
+  size: "Small" | "Medium" | "Large";
+  rawAcceptanceRate: number | null; // used for Safety/Match/Reach classification
+}
+
+// ─── Step 1: Ask LLM for college name recommendations only ───────────────────
+
+async function getCollegeRecommendations(studentProfile: string): Promise<{ name: string; type: "Safety" | "Match" | "Reach" }[]> {
+  const prompt = `You are a college admissions counselor. Based on this student profile, recommend exactly 8 US colleges/universities: 3 Safety, 3 Match, 2 Reach.
+
+Return ONLY a JSON array — no markdown, no extra text:
+[
+  { "name": "Exact Official University Name", "type": "Safety" },
+  ...
+]
+
+Rules:
+- Use the full, exact official name (e.g. "University of Massachusetts Amherst", not "UMass")
+- Safety = student is very likely to be admitted
+- Match = student has a reasonable chance
+- Reach = competitive but achievable (acceptance rate 12-30%)
+- Do NOT recommend Ivy League or schools under 12% acceptance unless the student asks
+- Tailor choices to the student's intended major, location preferences, and budget
+
+Student profile:
+${studentProfile}`;
+
+  const response = await groq.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    messages: [{ role: "user", content: prompt }],
+    max_tokens: 500,
+  });
+
+  const raw = response.choices[0]?.message?.content || "[]";
+  const cleaned = raw.replace(/```json|```/g, "").trim();
+  return JSON.parse(cleaned);
+}
+
+// ─── Step 2: Fetch real stats from College Scorecard API ─────────────────────
+
+async function fetchCollegeStats(collegeName: string): Promise<CollegeStats | null> {
+  const fields = [
+    "school.name",
+    "latest.admissions.admission_rate.overall",
+    "latest.admissions.sat_scores.average.overall",
+    "latest.student.size",
+    "latest.cost.tuition.out_of_state",
+    "latest.cost.tuition.in_state",
+    "latest.school.city",
+    "latest.school.state",
+    "latest.school.carnegie_size_setting",
+  ].join(",");
+
+  const url = `${SCORECARD_BASE}?school.name=${encodeURIComponent(collegeName)}&fields=${fields}&api_key=${SCORECARD_API_KEY}`;
+  const res = await fetch(url);
+  const data = await res.json();
+
+  const results: ScorecardResult[] = data?.results;
+  if (!results?.length) return null;
+
+  // Pick the closest name match
+  const school = results.find(r =>
+    r["school.name"].toLowerCase().includes(collegeName.toLowerCase().split(" ")[0])
+  ) || results[0];
+
+  const rawRate = school["latest.admissions.admission_rate.overall"];
+  const acceptanceRate = rawRate != null ? `${Math.round(rawRate * 100)}%` : "N/A";
+
+  const sat = school["latest.admissions.sat_scores.average.overall"];
+  const avgSAT = sat != null ? Math.round(sat).toString() : "N/A";
+
+  const oos = school["latest.cost.tuition.out_of_state"];
+  const ins = school["latest.cost.tuition.in_state"];
+  const tuitionVal = oos ?? ins;
+  const tuition = tuitionVal != null
+    ? `$${tuitionVal.toLocaleString()}/year`
+    : "N/A";
+
+  const studentSize = school["latest.student.size"] ?? 0;
+  const size: "Small" | "Medium" | "Large" =
+    studentSize < 5000 ? "Small" : studentSize < 15000 ? "Medium" : "Large";
+
+  const city = school["latest.school.city"] ?? "";
+  const state = school["latest.school.state"] ?? "";
+  const location = city && state ? `${city}, ${state}` : "N/A";
+
+  return {
+    name: school["school.name"],
+    location,
+    acceptanceRate,
+    avgSAT,
+    tuition,
+    size,
+    rawAcceptanceRate: rawRate,
+  };
+}
+
+// ─── Step 3: Ask LLM to write qualitative details using real stats ───────────
+
+async function enrichWithDescriptions(
+  studentProfile: string,
+  colleges: Array<CollegeStats & { type: "Safety" | "Match" | "Reach" }>
+): Promise<object> {
+  const prompt = `You are a college admissions counselor. A student has been matched to these colleges using REAL, verified statistics from the US Department of Education.
+
+Your job is to write ONLY the qualitative/descriptive fields. Do not change or invent any statistics.
+
+Student profile:
+${studentProfile}
+
+Colleges with verified stats:
+${JSON.stringify(colleges, null, 2)}
+
+Return ONLY valid JSON in this exact format — no markdown, no extra text:
+{
+  "colleges": [
+    {
+      "name": "exactly as provided",
+      "location": "exactly as provided",
+      "type": "exactly as provided",
+      "acceptanceRate": "exactly as provided",
+      "avgSAT": "exactly as provided",
+      "tuition": "exactly as provided",
+      "size": "exactly as provided",
+      "matchScore": <0-100 integer based on fit>,
+      "whyMatch": "2-3 sentences on why this school fits THIS specific student",
+      "topPrograms": ["Program 1", "Program 2", "Program 3"],
+      "campusLife": "1 sentence about clubs/activities relevant to student interests",
+      "financialAid": "1 sentence about financial aid or scholarship availability"
+    }
+  ],
+  "summary": "2-3 sentence overall strategy summary for this student",
+  "tips": ["Actionable tip 1", "Actionable tip 2", "Actionable tip 3"]
+}`;
+
+  const response = await groq.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    messages: [{ role: "user", content: prompt }],
+    max_tokens: 4000,
+  });
+
+  const raw = response.choices[0]?.message?.content || "{}";
+  const cleaned = raw.replace(/```json|```/g, "").trim();
+  return JSON.parse(cleaned);
+}
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
 
 export async function registerRoutes(
   httpServer: Server,
@@ -24,60 +194,38 @@ export async function registerRoutes(
     try {
       const input = api.qna.ask.input.parse(req.body);
 
-      const systemPrompt = `You are an expert college admissions counselor with deep knowledge of US colleges and universities.
-When given a student's profile, you MUST respond in exactly this JSON format and nothing else:
+      // Step 1 — LLM picks colleges (reasoning, no stats)
+      const recommendations = await getCollegeRecommendations(input.question);
 
-{
-  "colleges": [
-    {
-      "name": "Full University Name",
-      "location": "City, State",
-      "type": "Safety" | "Match" | "Reach",
-      "acceptanceRate": "XX%",
-      "avgGPA": "X.XX",
-      "avgSAT": "XXXX",
-      "tuition": "$XX,XXX/year",
-      "size": "Small" | "Medium" | "Large",
-      "ranking": "#XX National Universities",
-      "matchScore": 85,
-      "whyMatch": "2-3 sentences explaining why this college is a great fit for this specific student based on their profile",
-      "topPrograms": ["Program 1", "Program 2", "Program 3"],
-      "campusLife": "1 sentence about clubs/activities relevant to student interests",
-      "financialAid": "1 sentence about financial aid availability"
-    }
-  ],
-  "summary": "2-3 sentence overall summary of the student's college list strategy",
-  "tips": ["Tip 1 specific to this student", "Tip 2", "Tip 3"]
-}
+      // Step 2 — Fetch real stats for each college from Scorecard API
+      const statsResults = await Promise.all(
+        recommendations.map(async (rec) => {
+          const stats = await fetchCollegeStats(rec.name);
+          if (!stats) return null;
+          return { ...stats, type: rec.type };
+        })
+      );
 
-Rules:
-- Always return exactly 8 colleges: 3 Safety, 3 Match, 2 Reach
-- For REACH schools, choose schools with 15-30% acceptance rates — never recommend Ivy League or sub-12% acceptance schools unless the student explicitly requests them
-- matchScore is 0-100 based on how well the college fits the student
-- Use ACCURATE, REAL acceptance rates and GPA averages — never invent or estimate statistics
-- Reference these known accurate rates: UMass Amherst ~64%, Boston University ~37%, Northeastern ~18%, University of Rochester ~30%, RPI ~47%, WPI ~49%, Villanova ~28%, Fordham ~46%, American University ~35%, Lehigh ~41%, Tulane ~13%, University of Miami ~27%, NYU ~21%, Case Western ~47%
-- Tailor recommendations to the student's major, location, budget, and activities
-- Return ONLY valid JSON, no markdown, no extra text`;
+      const validColleges = statsResults.filter(
+        (c): c is CollegeStats & { type: "Safety" | "Match" | "Reach" } => c !== null
+      );
 
-      const messages = [
-        { role: "system" as const, content: systemPrompt },
-        { role: "user" as const, content: input.question }
-      ];
+      if (!validColleges.length) {
+        return res.status(502).json({ message: "Could not retrieve college data. Check your COLLEGE_SCORECARD_API_KEY." });
+      }
 
-      const response = await openrouter.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
-        messages,
-        max_tokens: 4000,
-      });
+      // Step 3 — LLM writes qualitative fields around the real stats
+      const answer = await enrichWithDescriptions(input.question, validColleges);
+      const answerStr = JSON.stringify(answer);
 
-      const answer = response.choices[0]?.message?.content || "{}";
-      const qna = await storage.createQna({ question: input.question, answer });
-      res.status(201).json({ ...qna, answer });
+      const qna = await storage.createQna({ question: input.question, answer: answerStr });
+      res.status(201).json({ ...qna, answer: answerStr });
+
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({
           message: err.errors[0]?.message || "Validation error",
-          field: err.errors[0]?.path.join('.'),
+          field: err.errors[0]?.path.join("."),
         });
       }
       console.error("Error:", err);
