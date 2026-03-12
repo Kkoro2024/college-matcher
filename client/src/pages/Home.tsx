@@ -44,7 +44,6 @@ function CollegeCard({ college, index }: { college: CollegeResult; index: number
       className="rounded-2xl overflow-hidden border"
       style={{ background: "rgba(255,255,255,0.03)", borderColor: "rgba(255,255,255,0.08)" }}
     >
-      {/* Header */}
       <div className="px-5 py-4">
         <div className="flex items-start justify-between gap-3 mb-3">
           <div className="flex-1">
@@ -66,7 +65,6 @@ function CollegeCard({ college, index }: { college: CollegeResult; index: number
             </div>
           </div>
 
-          {/* Match Score */}
           <div className="flex-shrink-0 text-center">
             <div className="w-14 h-14 rounded-full flex items-center justify-center border-2" style={{
               background: "rgba(59,130,246,0.1)",
@@ -80,7 +78,6 @@ function CollegeCard({ college, index }: { college: CollegeResult; index: number
           </div>
         </div>
 
-        {/* Stats row */}
         <div className="grid grid-cols-4 gap-2 mb-3">
           {[
             { label: "Accept", value: college.acceptanceRate },
@@ -95,12 +92,10 @@ function CollegeCard({ college, index }: { college: CollegeResult; index: number
           ))}
         </div>
 
-        {/* Why match */}
         <p className="text-xs leading-relaxed mb-3" style={{ color: "rgba(255,255,255,0.6)", fontFamily: "system-ui" }}>
           {college.whyMatch}
         </p>
 
-        {/* Programs */}
         <div className="flex flex-wrap gap-1.5 mb-3">
           {college.topPrograms.map(p => (
             <span key={p} className="text-[11px] px-2 py-0.5 rounded-full" style={{
@@ -110,7 +105,6 @@ function CollegeCard({ college, index }: { college: CollegeResult; index: number
           ))}
         </div>
 
-        {/* Expand button */}
         <button
           onClick={() => setExpanded(!expanded)}
           className="flex items-center gap-1 text-xs transition-opacity hover:opacity-100"
@@ -121,7 +115,6 @@ function CollegeCard({ college, index }: { college: CollegeResult; index: number
         </button>
       </div>
 
-      {/* Expanded section */}
       <AnimatePresence>
         {expanded && (
           <motion.div
@@ -178,7 +171,6 @@ function ResultsView({ result }: { result: MatchResult }) {
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-      {/* Summary */}
       <motion.div
         initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
         className="rounded-2xl p-5 mb-6 border"
@@ -195,7 +187,6 @@ function ResultsView({ result }: { result: MatchResult }) {
       <Section title="Match Schools" colleges={matches} color="#60a5fa" />
       <Section title="Reach Schools" colleges={reaches} color="#fb923c" />
 
-      {/* Tips */}
       {result.tips.length > 0 && (
         <motion.div
           initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
@@ -221,6 +212,7 @@ const FIELDS = [
   { id: "sat", label: "SAT / ACT Score", placeholder: "e.g. 1350 SAT or 29 ACT", icon: BookOpen },
   { id: "major", label: "Intended Major", placeholder: "e.g. Computer Science, Business, Pre-Med", icon: GraduationCap },
   { id: "location", label: "Preferred Location", placeholder: "e.g. Northeast, California, open to anywhere", icon: MapPin },
+  { id: "state", label: "Your Home State", placeholder: "e.g. New York, California, Texas", icon: MapPin },
   { id: "size", label: "School Size Preference", placeholder: "e.g. Small liberal arts, large research university", icon: Users },
   { id: "budget", label: "Annual Budget", placeholder: "e.g. Under $30k, need financial aid, no limit", icon: DollarSign },
   { id: "competitiveness", label: "Competitiveness", placeholder: "e.g. Ivy League only, moderately selective, open to all", icon: Star },
@@ -234,8 +226,8 @@ export default function Home() {
   const askMutation = useAskQuestion();
 
   const handleSubmit = () => {
-    const missing = FIELDS.filter(f => !form[f.id]?.trim());
-    if (missing.length > 3) {
+    const filled = FIELDS.filter(f => form[f.id]?.trim());
+    if (filled.length < 5) {
       setError("Please fill in at least 5 fields to get accurate recommendations.");
       return;
     }
@@ -247,6 +239,7 @@ GPA: ${form.gpa || "Not provided"}
 SAT/ACT: ${form.sat || "Not provided"}
 Intended Major: ${form.major || "Not provided"}
 Preferred Location: ${form.location || "Not provided"}
+Home State: ${form.state || "Not provided"}
 School Size Preference: ${form.size || "Not provided"}
 Annual Budget: ${form.budget || "Not provided"}
 Competitiveness: ${form.competitiveness || "Not provided"}
@@ -312,7 +305,6 @@ Extracurriculars & Activities: ${form.activities || "Not provided"}`;
       }} />
 
       <div className="relative z-10 max-w-2xl mx-auto px-4 py-12">
-        {/* Header */}
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center mb-10">
           <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{
             background: "linear-gradient(135deg, #3b82f6, #1d4ed8)",
@@ -326,7 +318,6 @@ Extracurriculars & Activities: ${form.activities || "Not provided"}`;
           </p>
         </motion.div>
 
-        {/* Form */}
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
           className="rounded-2xl p-6 border space-y-4"
           style={{ background: "rgba(255,255,255,0.03)", borderColor: "rgba(255,255,255,0.08)" }}>
