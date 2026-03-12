@@ -8,7 +8,6 @@ type CollegeResult = {
   location: string;
   type: "Safety" | "Match" | "Reach";
   acceptanceRate: string;
-  avgGPA: string;
   avgSAT: string;
   tuition: string;
   size: string;
@@ -81,7 +80,6 @@ function CollegeCard({ college, index }: { college: CollegeResult; index: number
         <div className="grid grid-cols-4 gap-2 mb-3">
           {[
             { label: "Accept", value: college.acceptanceRate },
-            { label: "Avg GPA", value: college.avgGPA },
             { label: "Avg SAT", value: college.avgSAT },
             { label: "Tuition", value: college.tuition.replace("/year", "") },
           ].map(stat => (
