@@ -91,7 +91,7 @@ async function fetchCollegeStats(collegeName: string): Promise<CollegeStats | nu
   const searchTerms: string[] = [];
   
   // Strategy 1: full name search
-  searchTerms.push(collegeName);
+  searchTerms.push(collegeName.replace(/,/g, ""));
   
   // Strategy 2: first two meaningful words
   const meaningfulWords = collegeName.split(" ").filter(w => !stopWords.has(w.toLowerCase()) && w.length > 2);
@@ -126,11 +126,13 @@ async function fetchCollegeStats(collegeName: string): Promise<CollegeStats | nu
   const scored = results.map(r => {
     const resultName = normalise(r["school.name"]);
     const matches = targetWords.filter(w => resultName.includes(w)).length;
-    // Boost exact substring match
     const exactBonus = resultName.includes(normalise(collegeName).substring(0, 10)) ? 2 : 0;
-    return { r, score: matches + exactBonus };
+    // Penalize if result name has words not in target (avoids "Delaware State" matching "University of Delaware")
+    const resultWords = resultName.split(" ").filter(w => !stopWords.has(w) && w.length > 2);
+    const extraWords = resultWords.filter(w => !normalise(collegeName).includes(w)).length;
+    return { r, score: matches + exactBonus - extraWords };
   });
-
+  
   const best = scored.sort((a, b) => b.score - a.score)[0].r;
   console.log(`Matched "${collegeName}" → "${best["school.name"]}"`);
 
@@ -203,7 +205,7 @@ Return ONLY valid JSON — no markdown, no extra text:
   const response = await groq.chat.completions.create({
     model: "llama-3.3-70b-versatile",
     messages: [{ role: "user", content: prompt }],
-    max_tokens: 4000,
+    max_tokens: 8000,
   });
 
   const raw = response.choices[0]?.message?.content || "{}";
