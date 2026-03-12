@@ -208,7 +208,8 @@ function ResultsView({ result }: { result: MatchResult }) {
 }
 
 const FIELDS = [
-  { id: "gpa", label: "GPA", placeholder: "e.g. 3.8", icon: Trophy },
+  { id: "gpa_unweighted", label: "Unweighted GPA (out of 4.0)", placeholder: "e.g. 3.8", icon: Trophy },
+  { id: "gpa_weighted", label: "Weighted GPA (out of 5.0)", placeholder: "e.g. 4.3", icon: Trophy },
   { id: "sat", label: "SAT / ACT Score", placeholder: "e.g. 1350 SAT or 29 ACT", icon: BookOpen },
   { id: "major", label: "Intended Major", placeholder: "e.g. Computer Science, Business, Pre-Med", icon: GraduationCap },
   { id: "location", label: "Preferred Location", placeholder: "e.g. Northeast, California, open to anywhere", icon: MapPin },
@@ -235,7 +236,8 @@ export default function Home() {
     setResult(null);
 
     const prompt = `Please find college matches for this student:
-GPA: ${form.gpa || "Not provided"}
+Unweighted GPA (out of 4.0): ${form.gpa_unweighted || "Not provided"}
+Weighted GPA (out of 5.0): ${form.gpa_weighted || "Not provided"}
 SAT/ACT: ${form.sat || "Not provided"}
 Intended Major: ${form.major || "Not provided"}
 Preferred Location: ${form.location || "Not provided"}
