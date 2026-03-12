@@ -73,6 +73,9 @@ ${studentProfile}`;
 // ─── Step 2: Fetch real stats from College Scorecard API ─────────────────────
 
 async function fetchCollegeStats(collegeName: string): Promise<CollegeStats | null> {
+  console.log("Fetching stats for:", collegeName);
+  console.log("API key present:", !!SCORECARD_API_KEY);
+  
   const fields = [
     "school.name",
     "latest.admissions.admission_rate.overall",
@@ -88,6 +91,8 @@ async function fetchCollegeStats(collegeName: string): Promise<CollegeStats | nu
   const url = `${SCORECARD_BASE}?school.name=${encodeURIComponent(collegeName)}&fields=${fields}&api_key=${SCORECARD_API_KEY}`;
   const res = await fetch(url);
   const data = await res.json();
+
+  console.log("Scorecard response for", collegeName, ":", JSON.stringify(data?.results?.length), "results");
 
   const results: ScorecardResult[] = data?.results;
   if (!results?.length) return null;
@@ -196,6 +201,8 @@ export async function registerRoutes(
 
       // Step 1 — LLM picks colleges (reasoning, no stats)
       const recommendations = await getCollegeRecommendations(input.question);
+
+      console.log("LLM recommended:", JSON.stringify(recommendations, null, 2));
 
       // Step 2 — Fetch real stats for each college from Scorecard API
       const statsResults = await Promise.all(
